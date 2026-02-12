@@ -30,7 +30,8 @@ NS = {'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
       'p': 'http://schemas.openxmlformats.org/presentationml/2006/main'}
 
 class PPTXProcessor(BaseDocumentProcessor):
-
+    def extract_structure(self, file_path: str) -> List[Dict[str, Any]]:
+        pass
 
     def extract_text( self, file_path: str) -> Dict[str, Any]:
 
@@ -138,7 +139,6 @@ class PPTXProcessor(BaseDocumentProcessor):
         return re.sub(r"[\x00-\x1F\x7F]", "", text)
 
     
-
     def apply_translations(self, extracted_content, translations) -> Dict[str, Any]:
         translated_content = copy.deepcopy(extracted_content)
         for slide_idx, slide in enumerate(translated_content.get("slides", []), start=1):

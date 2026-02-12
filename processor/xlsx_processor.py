@@ -88,80 +88,95 @@ def build_shared_strings(shared_strings_path: Path) -> List[List[str]]:
 
         return shared_strings 
 
-def extract_drawings(extract_dir: Path) -> list[Dict[str, Any]]:
-    drawings = []
+# def extract_drawings(extract_dir: Path) -> list[Dict[str, Any]]:
+#     drawings = []
 
-    drawings_dir = extract_dir / "xl" / "drawings"
-    if not drawings_dir.exists():
-        return drawings
+#     drawings_dir = extract_dir / "xl" / "drawings"
+#     if not drawings_dir.exists():
+#         return drawings
 
-    for drawing_file in sorted(drawings_dir.glob("drawing*.xml")):
-        tree = etree.parse(drawing_file)
-        root = tree.getroot()
+#     for drawing_file in sorted(drawings_dir.glob("drawing*.xml")):
+#         tree = etree.parse(drawing_file)
+#         root = tree.getroot()
 
-        # twoCellAnchor + oneCellAnchor together
-        for anchor in root.findall(".//xdr:twoCellAnchor", DRAWING_NS):
-            for sp in anchor.findall(".//xdr:sp", DRAWING_NS):
-                paragraphs: List[List[str]] = []
+#         # twoCellAnchor + oneCellAnchor together
+#         for anchor in root.findall(".//xdr:twoCellAnchor", DRAWING_NS):
+#             for sp in anchor.findall(".//xdr:sp", DRAWING_NS):
+#                 paragraphs: List[List[str]] = []
 
-                for p in sp.findall(".//a:p", DRAWING_NS):
-                    runs: List[str] = []
+#                 for p in sp.findall(".//a:p", DRAWING_NS):
+#                     runs: List[str] = []
 
-                    # IMPORTANT: iterate children to preserve order
-                    for node in p:
-                        local = etree.QName(node).localname
+#                     # IMPORTANT: iterate children to preserve order
+#                     for node in p:
+#                         local = etree.QName(node).localname
 
-                        if local in ("r", "fld"):
-                            t = node.find("a:t", DRAWING_NS)
-                            if t is not None and t.text is not None:
-                                runs.append(t.text)
+#                         if local in ("r", "fld"):
+#                             t = node.find("a:t", DRAWING_NS)
+#                             if t is not None and t.text is not None:
+#                                 runs.append(t.text)
 
-                        elif local == "br":
-                            runs.append("\n")
+#                         elif local == "br":
+#                             runs.append("\n")
 
-                    if runs:
-                        paragraphs.append(runs)
+#                     if runs:
+#                         paragraphs.append(runs)
 
-                if paragraphs:
-                    drawings.append({
-                        "drawing_file": drawing_file.name,
-                        "paragraphs": paragraphs,
-                    })
+#                 if paragraphs:
+#                     drawings.append({
+#                         "drawing_file": drawing_file.name,
+#                         "paragraphs": paragraphs,
+#                     })
 
-        for anchor in root.findall(".//xdr:oneCellAnchor", DRAWING_NS):
-            for sp in anchor.findall(".//xdr:sp", DRAWING_NS):
-                paragraphs: List[List[str]] = []
+#         for anchor in root.findall(".//xdr:oneCellAnchor", DRAWING_NS):
+#             for sp in anchor.findall(".//xdr:sp", DRAWING_NS):
+#                 paragraphs: List[List[str]] = []
 
-                for p in sp.findall(".//a:p", DRAWING_NS):
-                    runs: List[str] = []
+#                 for p in sp.findall(".//a:p", DRAWING_NS):
+#                     runs: List[str] = []
 
-                    # IMPORTANT: iterate children to preserve order
-                    for node in p:
-                        local = etree.QName(node).localname
+#                     # IMPORTANT: iterate children to preserve order
+#                     for node in p:
+#                         local = etree.QName(node).localname
 
-                        if local in ("r", "fld"):
-                            t = node.find("a:t", DRAWING_NS)
-                            if t is not None and t.text is not None:
-                                runs.append(t.text)
+#                         if local in ("r", "fld"):
+#                             t = node.find("a:t", DRAWING_NS)
+#                             if t is not None and t.text is not None:
+#                                 runs.append(t.text)
 
-                        elif local == "br":
-                            runs.append("\n")
+#                         elif local == "br":
+#                             runs.append("\n")
 
-                    if runs:
-                        paragraphs.append(runs)
+#                     if runs:
+#                         paragraphs.append(runs)
 
-                if paragraphs:
-                    drawings.append({
-                        "drawing_file": drawing_file.name,
-                        "paragraphs": paragraphs,
-                    })
+#                 if paragraphs:
+#                     drawings.append({
+#                         "drawing_file": drawing_file.name,
+#                         "paragraphs": paragraphs,
+#                     })
 
-    return drawings
+#     return drawings
 
 class XLSXProcessor(BaseDocumentProcessor):
     """Processor for XLSX documents"""
 
-    def extract_text( self, file_path: str) -> Dict[str, Any]:
+
+    def extract_structure(self, file_path: str) -> List[Dict[str, Any]]:
+        unzip(Path(file_path), Path(EXTRACT_DIR))
+        workbook = etree.parse(Path(EXTRACT_DIR) / "xl" / "workbook.xml")
+        root = workbook.getroot()
+        sheets = []
+        for sheet in root.findall(".//a:sheets/a:sheet", NS): 
+            sheets.append({
+                "name": sheet.get("name"),
+                "sheetId": sheet.get("sheetId"),
+                "rId": sheet.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"),
+            })
+        recompile(Path(EXTRACT_DIR), Path(file_path))
+        return sheets
+    
+    def extract_text( self, file_path: str, sheet_idx_to_translate: list[str] = []) -> Dict[str, Any]:
         # content = {"worksheets": []}
         
         unzip(Path(file_path), Path(EXTRACT_DIR))
@@ -173,11 +188,20 @@ class XLSXProcessor(BaseDocumentProcessor):
 
         sheets = []
         for sheet in root.findall(".//a:sheets/a:sheet", NS):
-            sheets.append({
-                "name": sheet.get("name"),
-                "sheetId": sheet.get("sheetId"),
-                "rId": sheet.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"),
-            })
+            if sheet_idx_to_translate:
+                if sheet.get("sheetId") in sheet_idx_to_translate:
+                    sheets.append({
+                        "name": sheet.get("name"),
+                        "sheetId": sheet.get("sheetId"),
+                        "rId": sheet.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"),
+                    })
+            else:
+                sheets.append({
+                    "name": sheet.get("name"),
+                    "sheetId": sheet.get("sheetId"),
+                    "rId": sheet.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"),
+                })
+            
         # print(sheets)
 
         # Map sheet rId to actual sheet file paths
@@ -215,13 +239,137 @@ class XLSXProcessor(BaseDocumentProcessor):
                     if cell_value:
                         data.append(cell_value)
 
-            sheet["data"] = data
-        
+            sheet["content"] = data
+
+            # Extract drawings for this specific sheet
+            drawings = root.findall(".//a:drawing", NS)
+            if drawings:
+                sheet_drawings = []
+                for drawing in drawings:
+                    rId = drawing.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+                    rel_path = sheet["sheet_path"].split("/")[-1]
+                    drawing_rels_path = Path(EXTRACT_DIR) / "xl" / "worksheets" / "_rels" / (rel_path + ".rels")
+                    
+                    if drawing_rels_path.exists():
+                        drawing_rels = etree.parse(drawing_rels_path)
+                        drawing_root = drawing_rels.getroot()
+                        for rel in drawing_root.findall("r:Relationship", REL_NS):
+                            if rel.get("Id") == rId and rel.get("Type") == "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing":
+                                drawing_target = rel.get("Target")
+                                drawing_file_name = drawing_target.split("/")[-1]
+                                drawing_file_path = Path(EXTRACT_DIR) / "xl" / "drawings" / drawing_file_name
+                                
+                                if drawing_file_path.exists():
+                                    drawing = {
+                                        "drawing_file": drawing_file_name,
+                                        "content": []
+                                    }
+                                    drawing_tree = etree.parse(drawing_file_path)
+                                    drawing_xml_root = drawing_tree.getroot()
+                                    
+                                    # Extract text from twoCellAnchor
+                                    for anchor in drawing_xml_root.findall(".//xdr:twoCellAnchor", DRAWING_NS):
+                                        for sp in anchor.findall(".//xdr:sp", DRAWING_NS):
+                                            paragraphs: List[List[str]] = []
+                                            for p in sp.findall(".//a:p", DRAWING_NS):
+                                                runs: List[str] = []
+                                                for node in p:
+                                                    local = etree.QName(node).localname
+                                                    if local in ("r", "fld"):
+                                                        t = node.find("a:t", DRAWING_NS)
+                                                        if t is not None and t.text is not None:
+                                                            runs.append(t.text)
+                                                    elif local == "br":
+                                                        runs.append("\n")
+                                                if runs:
+                                                    paragraphs.append(runs)
+                                            if paragraphs:
+                                                drawing["content"].append(paragraphs)
+                                                
+                                    
+                                    # Extract text from oneCellAnchor
+                                    for anchor in drawing_xml_root.findall(".//xdr:oneCellAnchor", DRAWING_NS):
+                                        for sp in anchor.findall(".//xdr:sp", DRAWING_NS):
+                                            paragraphs: List[List[str]] = []
+                                            for p in sp.findall(".//a:p", DRAWING_NS):
+                                                runs: List[str] = []
+                                                for node in p:
+                                                    local = etree.QName(node).localname
+                                                    if local in ("r", "fld"):
+                                                        t = node.find("a:t", DRAWING_NS)
+                                                        if t is not None and t.text is not None:
+                                                            runs.append(t.text)
+                                                    elif local == "br":
+                                                        runs.append("\n")
+                                                if runs:
+                                                    paragraphs.append(runs)
+                                            if paragraphs:
+                                                drawing["content"].append(paragraphs)
+                                    if drawing["content"]:
+                                        sheet_drawings.append(drawing)                                                
+                
+                if sheet_drawings:
+                    sheet["drawings"] = sheet_drawings
 
         return {
             "sheets": sheets,
-            "drawings": extract_drawings(Path(EXTRACT_DIR)),
         }
+    
+
+    def get_translatable_texts(self, extracted_content: Dict[str, Any]) -> List[str]:   
+        texts: List[str] = []
+
+        for sheet in extracted_content.get("sheets", []):
+            for cell in sheet.get("content", []):
+                cell_texts = cell.get("text", [])
+                for text in cell_texts:
+                    cleaned = self.clean_text(text)
+                    if self.is_translatable_text(cleaned):
+                        texts.append(cleaned)
+
+            for drawing in sheet.get("drawings", []):
+                for paragraph in drawing.get("content", []):
+                    for run in paragraph:
+                        cleaned = self.clean_text(run)
+                        if self.is_translatable_text(cleaned):
+                            texts.append(cleaned)
+
+        return texts
+    
+    def apply_translations(self, extracted_content: Dict[str, Any], translations: List[str]) -> Dict[str, Any]:
+        translated_content = copy.deepcopy(extracted_content)
+        translation_idx = 0
+        for sheet in translated_content.get("sheets", []):
+            for cell in sheet.get("content", []):
+                cell_texts = cell.get("text", [])
+                new_texts: List[str] = []
+                for text in cell_texts:
+                    cleaned = self.clean_text(text)
+                    if self.is_translatable_text(cleaned):
+                        if translation_idx < len(translations):
+                            new_texts.append(translations[translation_idx])
+                            translation_idx += 1
+                        else:
+                            new_texts.append(text)
+                    else:
+                        new_texts.append(text)
+                cell["text"] = new_texts
+            for drawing in sheet.get("drawings", []):
+                for paragraph in drawing.get("content", []):
+                    new_paragraph: List[str] = []
+                    for run in paragraph:
+                        cleaned = self.clean_text(run)
+                        if self.is_translatable_text(cleaned):
+                            if translation_idx < len(translations):
+                                new_paragraph.append(translations[translation_idx])
+                                translation_idx += 1
+                            else:
+                                new_paragraph.append(run)
+                        else:
+                            new_paragraph.append(run)
+                    for i in range(len(paragraph)):
+                        paragraph[i] = new_paragraph[i]
+        return translated_content
     
     def clean_text(self, text: str) -> str:
         text = text.replace("\u3000", "")
@@ -255,7 +403,7 @@ class XLSXProcessor(BaseDocumentProcessor):
     ) -> str:
         """Reconstruct XLSX by updating sharedStrings, sheet names, and drawings."""
         extract_dir = Path(EXTRACT_DIR)
-        unzip_xlsx(Path(original_path), extract_dir)
+        unzip(Path(original_path), extract_dir)
 
         shared_string_path = extract_dir / "xl" / "sharedStrings.xml"
         workbook_path = extract_dir / "xl" / "workbook.xml"
@@ -338,7 +486,7 @@ class XLSXProcessor(BaseDocumentProcessor):
         if drawings_dir.exists():
             # Group translations by drawing filename
             drawings_by_file: Dict[str, List[Dict[str, Any]]] = {}
-            for d in translated_content.get("drawings", []):
+            for d in translated_content["sheets"].get("drawings", []):
                 fname = d.get("drawing_file")
                 if not fname:
                     continue
