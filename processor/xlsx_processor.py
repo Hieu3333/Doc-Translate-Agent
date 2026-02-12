@@ -176,7 +176,7 @@ class XLSXProcessor(BaseDocumentProcessor):
         recompile(Path(EXTRACT_DIR), Path(file_path))
         return sheets
     
-    def extract_text( self, file_path: str, sheet_idx_to_translate: list[str] = []) -> Dict[str, Any]:
+    def extract_text( self, file_path: str, sheet_idx_to_translate: List[str] = []) -> Dict[str, Any]:
         # content = {"worksheets": []}
         
         unzip(Path(file_path), Path(EXTRACT_DIR))
@@ -399,10 +399,11 @@ class XLSXProcessor(BaseDocumentProcessor):
         return any(ch.isalpha() for ch in text)
 
     def reconstruct_document(
-        self, original_path: str, translated_content: Dict[str, Any], output_path: str, target_lang: str
+        self, original_path: str, translated_content: Dict[str, Any], output_path: str
     ) -> str:
         """Reconstruct XLSX by updating sharedStrings, sheet names, and drawings."""
         extract_dir = Path(EXTRACT_DIR)
+        output_file_path = Path(output_path)
         unzip(Path(original_path), extract_dir)
 
         shared_string_path = extract_dir / "xl" / "sharedStrings.xml"
@@ -486,11 +487,12 @@ class XLSXProcessor(BaseDocumentProcessor):
         if drawings_dir.exists():
             # Group translations by drawing filename
             drawings_by_file: Dict[str, List[Dict[str, Any]]] = {}
-            for d in translated_content["sheets"].get("drawings", []):
-                fname = d.get("drawing_file")
-                if not fname:
-                    continue
-                drawings_by_file.setdefault(fname, []).append(d)
+            for sheet in translated_content.get("sheets", []):
+                for d in sheet.get("drawings", []):
+                    fname = d.get("drawing_file")
+                    if not fname:
+                        continue
+                    drawings_by_file.setdefault(fname, []).append(d)
 
             for drawing_file in sorted(drawings_dir.glob("drawing*.xml")):
                 fname = drawing_file.name
@@ -615,10 +617,12 @@ class XLSXProcessor(BaseDocumentProcessor):
 
         
 
-        recompile(extract_dir, Path(output_path))
+        # Ensure output directory exists
+        output_file_path.parent.mkdir(parents=True, exist_ok=True)        
+        recompile(extract_dir, output_file_path)
         try:
             shutil.rmtree(EXTRACT_DIR)
         except Exception:
             pass
 
-        return output_path
+        return str(output_file_path)        

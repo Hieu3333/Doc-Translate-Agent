@@ -3,6 +3,7 @@ from typing import Dict
 class ToolRegistry:
     def __init__(self):
         self.tools: Dict[str, BaseTool] = {}
+
     def register_tool(self, tool: BaseTool):
         self.tools[tool.name] = tool
     
@@ -19,3 +20,7 @@ class ToolRegistry:
     
     def list_tools(self) -> Dict[str, str]:
         return {name: tool.get_schema() for name, tool in self.tools.items()}
+    
+    def set_context(self, main_file_path: str, model: str = None) -> None:
+        for tool in self.tools.values():
+            tool.set_content(main_file_path, model)

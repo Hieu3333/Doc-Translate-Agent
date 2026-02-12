@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 from uuid import UUID
 
@@ -22,12 +22,6 @@ class MessageSchema(BaseModel):
     class Config:
         from_attributes = True
 
-# Session schemas
-class SessionCreate(BaseModel):
-    context: Optional[str] = Field(None, description="Context for translation")
-
-class SessionUpdate(BaseModel):
-    context: Optional[str] = Field(None, description="Context for translation")
 
 class SessionWithMessages(BaseModel):
     id: UUID = Field(..., description="Session ID")
@@ -45,7 +39,6 @@ class SessionSchema(BaseModel):
     id: UUID = Field(..., description="Session ID")
     user_id: UUID = Field(..., description="User ID")
     main_file_path: str = Field(..., description="Storage path of the uploaded file")
-    context: Optional[str] = Field(None, description="Context for translation")
     created_at: datetime = Field(..., description="Session creation timestamp")
     updated_at: datetime = Field(..., description="Session last update timestamp")
     
@@ -60,3 +53,5 @@ class ChatResponse(BaseModel):
     user_message: MessageSchema = Field(..., description="Saved user message")
     agent_response: Optional[MessageSchema] = Field(None, description="Agent response message")
     file_path: Optional[str] = Field(None, description="Optional file path")
+    token_usage: Optional[Dict[str, Any]] = Field(None, description="Token usage details")
+    cost: Optional[float] = Field(None, description="Cost incurred for the chat interaction")

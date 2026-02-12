@@ -1,3 +1,4 @@
+import os
 from typing import List, Dict, Any
 import openai
 import json
@@ -6,8 +7,8 @@ from queue import Queue
 import re
 
 class OpenaiTranslator:
-    def __init__(self, api_key: str, model: str):
-        self.model = model
+    def __init__(self):
+        api_key = os.getenv("OPENAI_API_KEY")
         self.client = openai.OpenAI(api_key=api_key)
         self.cost_table = {
             # GPT-5 family
@@ -31,11 +32,8 @@ class OpenaiTranslator:
 
             # Realtime API models
             "gpt-realtime":         {"input": 4.00, "output": 16.00},  
-            "gpt-realtime-mini":    {"input": 0.60, "output": 2.40},   
+            "gpt-realtime-mini":    {"input": 0.60, "output": 2.40}
 
-            # Legacy / optionally used models
-            "gpt-3.5-turbo":        {"input": 0.50, "output": 1.50},   
-            "gpt-4o-realtime-preview": {"input": 5.00, "output": 20.00}, 
         }
 
     def _parse_llm_response(self, response_text: str) -> List[Dict[str, Any]]:
@@ -69,7 +67,7 @@ class OpenaiTranslator:
         raise ValueError(f"Failed to parse LLM response as JSON: {response_text[:200]}...")
 
     def _translate_batch(self, batch_texts: List[str], batch_id: int, source_language: str, 
-                         target_language: str, context: str, results_queue: Queue) -> None:
+                         target_language: str, context: str, model: str, results_queue: Queue) -> None:
         """
         Translate a batch of texts and store results in the queue.
         """
@@ -105,25 +103,36 @@ class OpenaiTranslator:
             
             processed_texts = [{"id": idx, "text": text} for idx, text in enumerate(batch_texts)]
             kwargs = {
-                "model": self.model,
+                "model": model,
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": json.dumps(processed_texts)}
                 ]
             }
+            
+            # GPT-5 models don't support temperature parameter
+            if not model.startswith("gpt-5"):
+                kwargs["temperature"] = 0.3
+            
             response = self.client.chat.completions.create(**kwargs)
             response_text = response.choices[0].message.content
             
             # Parse the LLM response
             translated_batch = self._parse_llm_response(response_text)
             
+            # Extract token usage information
+            token_usage = {
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+            }
+            
             # Store results in queue with batch_id for proper ordering
-            results_queue.put((batch_id, translated_batch))
+            results_queue.put((batch_id, translated_batch, token_usage))
         except Exception as e:
-            results_queue.put((batch_id, {"error": str(e)}))
+            results_queue.put((batch_id, {"error": str(e)}, None))
 
-    def translate_texts(self, texts: List[str], source_language: str, target_language: str, 
-                       context: str = "", batch_size: int = 10) -> List[str]:
+    def translate_texts(self, texts: List[str], source_language: str, target_language: str, model: str,
+                       context: str = "", batch_size: int = 10) -> Dict[str, Any]:
         """
         Translate texts in batches using parallel threads.
         
@@ -131,14 +140,18 @@ class OpenaiTranslator:
             texts: List of strings to translate
             source_language: Source language
             target_language: Target language
+            model: The model to use for translation
             context: Optional document context for consistent translation
             batch_size: Number of texts to translate per batch
         
         Returns:
-            List of translated strings in the same order as input
+            Dictionary with "translations" (list of strings) and "total_cost" (float)
         """
         if not texts:
-            return []
+            return {
+                "translations": [],
+                "total_cost": 0.0
+            }
         
         # Split texts into batches
         batches = []
@@ -153,7 +166,7 @@ class OpenaiTranslator:
         for batch_id, batch_texts in enumerate(batches):
             thread = threading.Thread(
                 target=self._translate_batch,
-                args=(batch_texts, batch_id, source_language, target_language, context, results_queue)
+                args=(batch_texts, batch_id, source_language, target_language, context, model, results_queue)
             )
             thread.start()
             threads.append(thread)
@@ -164,9 +177,12 @@ class OpenaiTranslator:
         
         # Collect results in order
         batch_results = {}
+        token_usage_list = []
         while not results_queue.empty():
-            batch_id, result = results_queue.get()
+            batch_id, result, token_usage = results_queue.get()
             batch_results[batch_id] = result
+            if token_usage:
+                token_usage_list.append(token_usage)
         
         # Check for errors
         for batch_id, result in batch_results.items():
@@ -180,5 +196,17 @@ class OpenaiTranslator:
             for item in batch_translations:
                 all_translations.append(item.get("text", ""))
         
-        return all_translations
-  
+        # Calculate total cost
+        total_cost = 0.0
+        model_pricing = self.cost_table.get(model)
+        
+        if model_pricing:
+            for token_usage in token_usage_list:
+                input_cost = (token_usage["input_tokens"] / 1_000_000) * model_pricing["input"]
+                output_cost = (token_usage["output_tokens"] / 1_000_000) * model_pricing["output"]
+                total_cost += input_cost + output_cost
+        
+        return {
+            "translations": all_translations,
+            "total_cost": total_cost
+        }

@@ -1,19 +1,24 @@
 """
-Supabase file storage service for handling file uploads and downloads.
+File storage service for handling file uploads and downloads.
 """
 
 from core.database import get_supabase_client
 from typing import Optional, Tuple
 import io
 import os
+from pathlib import Path
 from dotenv import load_dotenv
+import logging
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
 class FileStorageService:
-    """Service for managing file operations with Supabase Storage"""
+    """Service for managing file operations - Supabase as main storage, local for processing"""
 
     BUCKET_NAME = os.getenv("SUPABASE_STORAGE_BUCKET")
+    LOCAL_UPLOAD_DIR = "uploads"  # Local directory for file processing
     
     @staticmethod
     def upload_file(file_path: str, file_content: bytes) -> str:
@@ -21,26 +26,97 @@ class FileStorageService:
         Upload a file to Supabase storage.
         
         Args:
-            file_path: The path where the file will be stored (e.g., "session_id/filename.pdf")
+            file_path: The desired path (e.g., "user_id/session_id/filename.pdf")
             file_content: The file content as bytes
         
         Returns:
-            The public URL of the uploaded file
+            Supabase path (not URL, just the path)
         """
         supabase = get_supabase_client()
         
         try:
-            response = supabase.storage.from_(FileStorageService.BUCKET_NAME).upload(
+            logger.info(f"Uploading file to Supabase at path: {file_path} (size: {len(file_content)} bytes)")
+            
+            supabase.storage.from_(FileStorageService.BUCKET_NAME).upload(
                 file_path,
                 file_content
             )
             
-            # Get public URL
-            public_url = supabase.storage.from_(FileStorageService.BUCKET_NAME).get_public_url(file_path)
-            
-            return public_url
+            logger.info(f"File successfully uploaded to Supabase: {file_path}")
+            # Return the Supabase path
+            return file_path
         except Exception as e:
-            raise Exception(f"Error uploading file: {str(e)}")
+            logger.error(f"Error uploading file to Supabase at path '{file_path}': {str(e)}", exc_info=True)
+            raise Exception(f"Error uploading file to Supabase: {str(e)}")
+    
+    @staticmethod
+    def download_and_save_locally(supabase_path: str) -> str:
+        """
+        Download a file from Supabase and save it locally for processing.
+        
+        Args:
+            supabase_path: The Supabase storage path (e.g., "user_id/session_id/filename.pdf")
+        
+        Returns:
+            The local file path where the file was saved
+        """
+        supabase = get_supabase_client()
+        
+        try:
+            logger.info(f"Downloading file from Supabase: {supabase_path}")
+            
+            # Download from Supabase
+            file_content = supabase.storage.from_(FileStorageService.BUCKET_NAME).download(supabase_path)
+            
+            # Save to local storage
+            local_path = Path(FileStorageService.LOCAL_UPLOAD_DIR) / supabase_path
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(local_path, 'wb') as f:
+                f.write(file_content)
+            
+            logger.info(f"File saved locally at: {local_path}")
+            # Return the local path as a string
+            return str(local_path)
+        except Exception as e:
+            logger.error(f"Error downloading file from Supabase at path '{supabase_path}': {str(e)}", exc_info=True)
+            raise Exception(f"Error downloading and saving file locally from path '{supabase_path}': {str(e)}")
+    
+    @staticmethod
+    def upload_local_file_to_supabase(local_file_path: str, supabase_path: str) -> str:
+        """
+        Upload a local file to Supabase storage.
+        
+        Args:
+            local_file_path: The local file path to upload (e.g., "uploads/user_id/session_id/output.xlsx")
+            supabase_path: The desired Supabase path for the file
+        
+        Returns:
+            The Supabase path where the file was saved
+        """
+        supabase = get_supabase_client()
+        
+        try:
+            logger.info(f"Reading local file from: {local_file_path}")
+            
+            # Read local file
+            with open(local_file_path, 'rb') as f:
+                file_content = f.read()
+            
+            logger.info(f"Uploading output file to Supabase at path: {supabase_path} (size: {len(file_content)} bytes)")
+            
+            # Upload to Supabase
+            supabase.storage.from_(FileStorageService.BUCKET_NAME).upload(
+                supabase_path,
+                file_content
+            )
+            
+            logger.info(f"Output file successfully uploaded to Supabase: {supabase_path}")
+            # Return the Supabase path
+            return supabase_path
+        except Exception as e:
+            logger.error(f"Error uploading local file to Supabase: local_path='{local_file_path}', supabase_path='{supabase_path}', error={str(e)}", exc_info=True)
+            raise Exception(f"Error uploading local file to Supabase: {str(e)}")
     
     @staticmethod
     def download_file(file_path: str) -> Tuple[bytes, str]:

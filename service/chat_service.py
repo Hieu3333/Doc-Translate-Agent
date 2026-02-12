@@ -1,30 +1,49 @@
+from core.schemas.session import MessageSchema
 from llm_provider.openai_llm import OpenAILLM
 from typing import Optional, List
+from agent.translation_agent import TranslationAgent
+from service.storage_service import FileStorageService
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ChatService:
-    def __init__(self):
-        self.llm = OpenAILLM()
+    def __init__(self, master_language: str = "English"):
+        self.translation_agent = TranslationAgent(master_language=master_language)
     
     async def handle_user_message(
         self,
         user_message: str,
-        session_context: Optional[str] = None,
-        conversation_history: Optional[List[dict]] = None,
-    ) -> str:
+        main_file_path: str,
+        conversation_history: Optional[List[MessageSchema]] = None,
+        model: str = "gpt-4o-mini"
+    ) -> dict:
+        
         """
-        Handle user message by processing it through the LLM.
+        Handle a user message by processing it through the Translation Agent.
         
         Args:
-            user_message: The user's input message
-            session_context: Optional context for the translation/task
-            conversation_history: Optional list of previous messages for context
-        
+            user_message: The message sent by the user
+            main_file_path: Supabase path to the main file for the session
+            conversation_history: Optional list of past messages in the conversation as MessageSchema objects
+            model: The language model to use for processing the message
         Returns:
-            The agent's response message
+            dict: The agent's response to the user's message along with token usage, cost, and optional output_file
         """
-        response = await self.llm.process_message(
-            user_message=user_message,
-            session_context=session_context,
-            conversation_history=conversation_history
+        
+        # Download file from Supabase and save locally for processing
+       
+       
+        result = self.translation_agent.process_message(
+            message=user_message,
+            main_file_path=main_file_path,
+            chat_history=conversation_history or [],
+            model=model
         )
-        return response
+        return {
+            "response": result.get("response"),
+            "token_usage": result.get("token_usage"),
+            "cost": result.get("cost"),
+            "output_file": result.get("output_file")
+        }
+        

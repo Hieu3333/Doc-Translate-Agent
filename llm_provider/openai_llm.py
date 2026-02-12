@@ -2,10 +2,16 @@
 OpenAI LLM Provider for handling message processing and responses.
 """
 
+
 import os
 from typing import Optional, List
 from dotenv import load_dotenv
-
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 load_dotenv()
 
 
@@ -24,105 +30,97 @@ class OpenAILLM:
             self.client = OpenAI(api_key=self.api_key)
         except ImportError:
             raise ImportError("OpenAI library is not installed. Run: pip install openai")
+        
+        self.cost_table = {
+            # GPT-5 family
+            "gpt-5.2":         {"input": 1.75,  "output": 14.00},  
+            "gpt-5.2-pro":     {"input": 21.0,  "output": 168.0},  
+            "gpt-5-mini":      {"input": 0.25,  "output": 2.00},   
+
+            # GPT-5 and GPT-5.1 variants (community / docs indicate similar pricing)
+            "gpt-5":           {"input": 1.25,  "output": 10.00},  
+            "gpt-5.1":         {"input": 1.25,  "output": 10.00},  
+            "gpt-5-nano":      {"input": 0.05,  "output": 0.40},   
+
+            # GPT-4.1 family
+            "gpt-4.1":         {"input": 2.00,  "output": 8.00},   
+            "gpt-4.1-mini":    {"input": 0.40,  "output": 1.60},   
+            "gpt-4.1-nano":    {"input": 0.10,  "output": 0.40},   
+
+            # GPT-4o family
+            "gpt-4o-mini":     {"input": 0.15,  "output": 0.60},   
+            "gpt-4o":          {"input": 2.50,  "output": 10.00},  
+
+            # Realtime API models
+            "gpt-realtime":         {"input": 4.00, "output": 16.00},  
+            "gpt-realtime-mini":    {"input": 0.60, "output": 2.40}
+
+        }
     
-    async def process_message(
+    def chat_completion(
         self,
-        user_message: str,
-        session_context: Optional[str] = None,
-        conversation_history: Optional[List[dict]] = None,
-    ) -> str:
-        """
-        Process user message with OpenAI and return agent response.
+        messages: List[dict],
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        tools: Optional[List[dict]] = None,
+        tool_choice: Optional[str] = None,
+    ) -> dict:
+        """Send chat completion request to OpenAI API."""
+        chosen_model = model if model else self.model
         
-        Args:
-            user_message: The user's input message
-            session_context: Optional context for the translation/task
-            session_main_file_path: Optional path to the main file being processed
-            conversation_history: Optional list of previous messages for context
+        # GPT-5 models don't support temperature parameter
+        is_gpt5 = chosen_model.startswith("gpt-5")
         
-        Returns:
-            The agent's response message
-        """
-        try:
-            # Build system prompt
-            system_prompt = self._build_system_prompt(
-                session_context=session_context,
-            )
-            
-            # Build message list
-            messages = self._build_messages(
-                system_prompt=system_prompt,
-                user_message=user_message,
-                conversation_history=conversation_history
-            )
-            
-            # Call OpenAI API
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=2000,
-            )
-            
-            # Extract response text
-            agent_response = response.choices[0].message.content
-            
-            return agent_response
+        api_params = {
+            "model": chosen_model,
+            "messages": messages,
+        }
         
-        except Exception as e:
-            # Return error message instead of raising
-            return f"Error processing message with LLM: {str(e)}"
-    
-    def _build_system_prompt(
-        self,
-        session_context: Optional[str] = None,
-    ) -> str:
-        """
-        Build the system prompt for the LLM.
+        if not is_gpt5:
+            api_params["temperature"] = temperature
         
-        Args:
-            session_context: Optional context for the task
-            session_main_file_path: Optional path to the main file
+        if max_tokens is not None:
+            api_params["max_tokens"] = max_tokens
         
-        Returns:
-            The system prompt string
-        """
-        prompt = "You are a helpful AI assistant for document translation and processing."
+        # Add tools if provided
+        if tools:
+            api_params["tools"] = tools
+            # If tools are provided, set tool_choice (default to "auto")
+            api_params["tool_choice"] = tool_choice if tool_choice else "auto"
         
-        if session_context:
-            prompt += f"\n\nSession Context: {session_context}"
+        response = self.client.chat.completions.create(**api_params)
         
+        # Extract response data
+        message = response.choices[0].message
+        logger.info(f"LLM Response Message: {message}")
+        output_text = message.content or ""
         
-        prompt += "\n\nProvide clear, concise, and helpful responses."
+        # Extract tool calls if present
+        tool_calls = []
+        if hasattr(message, 'tool_calls') and message.tool_calls:
+            tool_calls = [
+                {
+                    "id": call.id,
+                    "type": call.type,
+                    "function": {
+                        "name": call.function.name,
+                        "arguments": call.function.arguments
+                    }
+                }
+                for call in message.tool_calls
+            ]
         
-        return prompt
-    
-    def _build_messages(
-        self,
-        system_prompt: str,
-        user_message: str,
-        conversation_history: Optional[List[dict]] = None,
-    ) -> List[dict]:
-        """
-        Build the messages list for the OpenAI API.
+        token_usage = {
+            "input_tokens": response.usage.prompt_tokens,
+            "output_tokens": response.usage.completion_tokens,
+        }
+        cost = token_usage["input_tokens"] * self.cost_table[chosen_model]["input"] / 1_000_000 + \
+               token_usage["output_tokens"] * self.cost_table[chosen_model]["output"] / 1_000_000
         
-        Args:
-            system_prompt: The system prompt
-            user_message: The current user message
-            conversation_history: Optional list of previous messages
-        
-        Returns:
-            List of message dictionaries for the API
-        """
-        messages = [
-            {"role": "system", "content": system_prompt}
-        ]
-        
-        # Add conversation history if provided
-        if conversation_history:
-            messages.extend(conversation_history)
-        
-        # Add current user message
-        messages.append({"role": "user", "content": user_message})
-        
-        return messages
+        return {
+            "response": output_text,
+            "tool_calls": tool_calls,
+            "token_usage": token_usage,
+            "cost": cost
+        }
