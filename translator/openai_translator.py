@@ -181,4 +181,4 @@ class OpenaiTranslator:
                 all_translations.append(item.get("text", ""))
         
         return all_translations
-        return all_translations
+  
