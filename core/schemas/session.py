@@ -8,7 +8,7 @@ class MessageCreate(BaseModel):
     role: str = Field(..., description="Role (e.g., 'user', 'assistant')")
     content: str = Field(..., description="Message content")
     file_path: Optional[str] = Field(None, description="Optional file path")
-
+    reasoning_content: Optional[str] = Field(None, description="Optional reasoning content (for deepseek-reasoner)")
 
 
 class MessageSchema(BaseModel):
@@ -17,6 +17,7 @@ class MessageSchema(BaseModel):
     role: str = Field(..., description="Role (e.g., 'user', 'assistant')")
     content: str = Field(..., description="Message content")
     file_path: Optional[str] = Field(None, description="Optional file path")
+    reasoning_content: Optional[str] = Field(None, description="Optional reasoning content (for deepseek-reasoner)")
     created_at: datetime = Field(..., description="Message creation timestamp")
     
     class Config:
@@ -46,7 +47,9 @@ class SessionSchema(BaseModel):
         from_attributes = True
     
 class ChatRequest(BaseModel):
+    master_language: str = Field(..., description="Master language for translation (e.g., 'English')")
     message: str = Field(..., description="User message to send")
+    model: str = Field("gpt-4o-mini", description="Language model to use for processing the message")
     
 
 class ChatResponse(BaseModel):

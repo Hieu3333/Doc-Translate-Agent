@@ -4,6 +4,7 @@ import os
 from dotenv import load_dotenv
 from api.auth import router as auth_router
 from api.sessions import router as sessions_router
+from api.models import router as models_router
 
 load_dotenv()
 
@@ -26,6 +27,7 @@ app.add_middleware(
 # Include routers
 app.include_router(auth_router)
 app.include_router(sessions_router)
+app.include_router(models_router)
 
 @app.get("/", tags=["root"])
 async def root():

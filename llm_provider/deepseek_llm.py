@@ -1,62 +1,52 @@
 """
-OpenAI LLM Provider for handling message processing and responses.
+DeepSeek LLM Provider for handling message processing and responses.
+Compatible with OpenAI-style API.
 """
-
 
 import os
 from typing import Optional, List
 from dotenv import load_dotenv
 import logging
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
 load_dotenv()
 
 
-class OpenAILLM:
-    """Handler for OpenAI API calls"""
-    
+class DeepSeekLLM:
+    """Handler for DeepSeek API calls (OpenAI-compatible endpoint)"""
+
     def __init__(self):
-        self.api_key = os.getenv("OPENAI_API_KEY")
-        self.model = "gpt-4o-mini"
-        
+        self.api_key = os.getenv("DEEPSEEK_API_KEY")
+        self.model = "deepseek-chat"
+
         if not self.api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is not set")
-        
+            raise ValueError("DEEPSEEK_API_KEY environment variable is not set")
+
         try:
             from openai import OpenAI
-            self.client = OpenAI(api_key=self.api_key)
+            # DeepSeek uses OpenAI-compatible endpoint
+            self.client = OpenAI(
+                api_key=self.api_key,
+                base_url="https://api.deepseek.com"
+            )
         except ImportError:
             raise ImportError("OpenAI library is not installed. Run: pip install openai")
-        
+
+        # DeepSeek pricing (adjust if official pricing changes)
         self.cost_table = {
-            # GPT-5 family
-            "gpt-5.2":         {"input": 1.75,  "output": 14.00},  
-            "gpt-5.2-pro":     {"input": 21.0,  "output": 168.0},  
-            "gpt-5-mini":      {"input": 0.25,  "output": 2.00},   
-
-            # GPT-5 and GPT-5.1 variants (community / docs indicate similar pricing)
-            "gpt-5":           {"input": 1.25,  "output": 10.00},  
-            "gpt-5.1":         {"input": 1.25,  "output": 10.00},  
-            "gpt-5-nano":      {"input": 0.05,  "output": 0.40},   
-
-            # GPT-4.1 family
-            "gpt-4.1":         {"input": 2.00,  "output": 8.00},   
-            "gpt-4.1-mini":    {"input": 0.40,  "output": 1.60},   
-            "gpt-4.1-nano":    {"input": 0.10,  "output": 0.40},   
-
-            # GPT-4o family
-            "gpt-4o-mini":     {"input": 0.15,  "output": 0.60},   
-            "gpt-4o":          {"input": 2.50,  "output": 10.00},  
-
+            "deepseek-chat": {"input": 0.028, "output": 0.42},
+            "deepseek-reasoner": {"input": 0.028, "output": 0.42},
         }
-    
+
     def get_available_models(self) -> List[str]:
-        """Get list of available models from OpenAI provider"""
+        """Get list of available DeepSeek models"""
         return list(self.cost_table.keys())
-    
+
     def chat_completion(
         self,
         messages: List[dict],
@@ -66,41 +56,37 @@ class OpenAILLM:
         tools: Optional[List[dict]] = None,
         tool_choice: Optional[str] = None,
     ) -> dict:
-        """Send chat completion request to OpenAI API."""
+        """Send chat completion request to DeepSeek API."""
+
         chosen_model = model if model else self.model
-        
-        # GPT-5 models don't support temperature parameter
-        is_gpt5 = chosen_model.startswith("gpt-5")
-        
+
         api_params = {
             "model": chosen_model,
             "messages": messages,
+            "temperature": temperature,
         }
-        
-        if not is_gpt5:
-            api_params["temperature"] = temperature
-        
+
         if max_tokens is not None:
             api_params["max_tokens"] = max_tokens
-        
-        # Add tools if provided
+
+        # Add tools if provided (DeepSeek supports OpenAI-style tools)
         if tools:
             api_params["tools"] = tools
-            # If tools are provided, set tool_choice (default to "auto")
             api_params["tool_choice"] = tool_choice if tool_choice else "auto"
-        
+
         response = self.client.chat.completions.create(**api_params)
-        
-        # Extract response data
+
+        # Extract response
         message = response.choices[0].message
-        logger.info(f"LLM Response Message: {message}")
+        logger.info(f"DeepSeek LLM Response Message: {message}")
+
         output_text = message.content or ""
         
-        # Extract reasoning_content if present
+        # Extract reasoning_content if present (for deepseek-reasoner)
         reasoning_content = None
         if hasattr(message, 'reasoning_content') and message.reasoning_content:
             reasoning_content = message.reasoning_content
-        
+
         # Extract tool calls if present
         tool_calls = []
         if hasattr(message, 'tool_calls') and message.tool_calls:
@@ -115,14 +101,23 @@ class OpenAILLM:
                 }
                 for call in message.tool_calls
             ]
-        
+
         token_usage = {
             "input_tokens": response.usage.prompt_tokens,
             "output_tokens": response.usage.completion_tokens,
         }
-        cost = token_usage["input_tokens"] * self.cost_table[chosen_model]["input"] / 1_000_000 + \
-               token_usage["output_tokens"] * self.cost_table[chosen_model]["output"] / 1_000_000
-        
+
+        cost = 0
+        if chosen_model in self.cost_table:
+            cost = (
+                token_usage["input_tokens"]
+                * self.cost_table[chosen_model]["input"]
+                / 1_000_000
+                + token_usage["output_tokens"]
+                * self.cost_table[chosen_model]["output"]
+                / 1_000_000
+            )
+
         return {
             "response": output_text,
             "reasoning_content": reasoning_content,

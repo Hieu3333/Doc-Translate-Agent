@@ -18,7 +18,7 @@ class FileStorageService:
     """Service for managing file operations - Supabase as main storage, local for processing"""
 
     BUCKET_NAME = os.getenv("SUPABASE_STORAGE_BUCKET")
-    LOCAL_UPLOAD_DIR = "uploads"  # Local directory for file processing
+    LOCAL_UPLOAD_DIR = "data/upload"  # Local directory for file processing
     
     @staticmethod
     def upload_file(file_path: str, file_content: bytes) -> str:

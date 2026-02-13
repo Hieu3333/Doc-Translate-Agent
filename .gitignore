@@ -41,5 +41,7 @@ wheels/
 .coverage
 htmlcov/
 
+data/
+
 # Logs
 *.log

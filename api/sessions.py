@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, status, Header, UploadFile, File, Form
+from fastapi.responses import FileResponse, Response
 from core.schemas.session import (
     SessionSchema,
     SessionWithMessages,
@@ -273,7 +274,102 @@ async def get_messages(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error fetching messages: {str(e)}"
         )
+    
+@router.get("/{session_id}/download")
+async def download_session_file(
+    session_id: str,
+    authorization: Optional[str] = Header(None),
+):
+    """Download the main file of a session"""
+    user_id = verify_token(authorization)
+    session_service = SessionService()
+    logger.info(f"Downloading main file for session {session_id}")
+    
+    try:
+        # Verify session exists and user owns it
+        session = session_service.get_session(UUID(session_id))
+        
+        if str(session.user_id) != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied"
+            )
+        
+        # Download file from storage
+        file_content, content_type = FileStorageService.download_file(session.main_file_path)
+        
+        # Return file as binary response
+        filename = Path(session.main_file_path).name
+        return Response(
+            content=file_content,
+            media_type=content_type,
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading session file: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error downloading session file: {str(e)}"
+        )
 
+@router.get("/{session_id}/{message_id}/download")
+async def download_message_file(
+    session_id: str,
+    message_id: str,
+    authorization: Optional[str] = Header(None),
+):
+    """Download a message's file"""
+    user_id = verify_token(authorization)
+    session_service = SessionService()
+    logger.info(f"Downloading file for message {message_id} in session {session_id}")
+    
+    try:
+        # Verify session exists and user owns it
+        session = session_service.get_session(UUID(session_id))
+        
+        if str(session.user_id) != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied"
+            )
+        
+        # Get message
+        message = session_service.get_message(UUID(message_id))
+        
+        if not message or str(message.session_id) != session_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Message not found"
+            )
+        
+        if not message.file_path:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No file associated with this message"
+            )
+        
+        # Download file from storage
+        file_content, content_type = FileStorageService.download_file(message.file_path)
+        
+        # Return file as binary response
+        filename = Path(message.file_path).name
+        return Response(
+            content=file_content,
+            media_type=content_type,
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading message file: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error downloading message file: {str(e)}"
+        )
 # ===================== Chat Endpoint =====================
 
 @router.post("/{session_id}/chat", response_model=ChatResponse, status_code=status.HTTP_201_CREATED)
@@ -322,25 +418,39 @@ async def chat(
         # Exclude the just-saved user message from conversation history
         conversation_history = messages[:-1] if messages else []
         
-        chat_service = ChatService()
+        chat_service = ChatService(master_language=chat_request.master_language)
         
         # Process message with LLM
         agent_response = await chat_service.handle_user_message(
             user_message=chat_request.message,
             conversation_history=conversation_history,
-            main_file_path=local_file_path
+            main_file_path=local_file_path,
+            model=chat_request.model
         )
         
         # Extract output file if available
         output_file = agent_response.get("output_file")
         supabase_output_path = None
         
+        # Save agent response message first (with empty file_path initially)
+        agent_message = session_service.add_message_to_session(
+            session_id=UUID(session_id),
+            message=MessageCreate(
+                role="assistant",
+                content=agent_response.get("response"),
+                file_path=None,
+                reasoning_content=agent_response.get("reasoning_content")
+            )
+        )
+        
         # Upload output file to Supabase if it exists
         if output_file:
             try:
-                # Create Supabase path for output file
-                output_filename = Path(output_file).name
-                supabase_output_path = f"{user_id}/{session_id}/outputs/{output_filename}"
+                # Create Supabase path using message ID to ensure uniqueness
+                # Format: {user_id}/{session_id}/{message_id}/{original_filename}
+                output_path = Path(output_file)
+                output_filename = output_path.name
+                supabase_output_path = f"{user_id}/{session_id}/{agent_message.id}/{output_filename}"
                 
                 # Upload to Supabase
                 supabase_output_path = FileStorageService.upload_local_file_to_supabase(
@@ -348,18 +458,16 @@ async def chat(
                     supabase_path=supabase_output_path
                 )
                 logger.info(f"Output file uploaded to Supabase: {supabase_output_path}")
+                
+                # Update agent message with file path
+                session_service.update_message_file_path(
+                    message_id=agent_message.id,
+                    file_path=supabase_output_path
+                )
+                agent_message.file_path = supabase_output_path
+                logger.info(f"Agent message {agent_message.id} updated with file path: {supabase_output_path}")
             except Exception as e:
                 logger.error(f"Error uploading output file to Supabase: {str(e)}", exc_info=True)
-        
-        # Save agent response message using session_service with Supabase path
-        agent_message = session_service.add_message_to_session(
-            session_id=UUID(session_id),
-            message=MessageCreate(
-                role="assistant",
-                content=agent_response.get("response"),
-                file_path=supabase_output_path
-            )
-        )
         
         if supabase_output_path:
             logger.info(f"Output file attached to agent response: {supabase_output_path}")

@@ -1,39 +1,30 @@
 import os
 from typing import List, Dict, Any
-import openai
 import json
 import threading
 from queue import Queue
 import re
 
-class OpenaiTranslator:
+class DeepseekTranslator:
     def __init__(self):
-        api_key = os.getenv("OPENAI_API_KEY")
-        self.client = openai.OpenAI(api_key=api_key)
+        api_key = os.getenv("DEEPSEEK_API_KEY")
+        
+        if not api_key:
+            raise ValueError("DEEPSEEK_API_KEY environment variable is not set")
+        
+        try:
+            from openai import OpenAI
+            self.client = OpenAI(
+                api_key=api_key,
+                base_url="https://api.deepseek.com"
+            )
+        except ImportError:
+            raise ImportError("OpenAI library is not installed. Run: pip install openai")
+        
+        # DeepSeek pricing
         self.cost_table = {
-            # GPT-5 family
-            "gpt-5.2":         {"input": 1.75,  "output": 14.00},  
-            "gpt-5.2-pro":     {"input": 21.0,  "output": 168.0},  
-            "gpt-5-mini":      {"input": 0.25,  "output": 2.00},   
-
-            # GPT-5 and GPT-5.1 variants (community / docs indicate similar pricing)
-            "gpt-5":           {"input": 1.25,  "output": 10.00},  
-            "gpt-5.1":         {"input": 1.25,  "output": 10.00},  
-            "gpt-5-nano":      {"input": 0.05,  "output": 0.40},   
-
-            # GPT-4.1 family
-            "gpt-4.1":         {"input": 2.00,  "output": 8.00},   
-            "gpt-4.1-mini":    {"input": 0.40,  "output": 1.60},   
-            "gpt-4.1-nano":    {"input": 0.10,  "output": 0.40},   
-
-            # GPT-4o family
-            "gpt-4o-mini":     {"input": 0.15,  "output": 0.60},   
-            "gpt-4o":          {"input": 2.50,  "output": 10.00},  
-
-            # Realtime API models
-            "gpt-realtime":         {"input": 4.00, "output": 16.00},  
-            "gpt-realtime-mini":    {"input": 0.60, "output": 2.40}
-
+            "deepseek-chat": {"input": 0.028, "output": 0.42},
+            "deepseek-reasoner": {"input": 0.028, "output": 0.42},
         }
 
     def _parse_llm_response(self, response_text: str) -> List[Dict[str, Any]]:
@@ -108,12 +99,9 @@ class OpenaiTranslator:
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": json.dumps(processed_texts)}
-                ]
+                ],
+                "temperature": 0.3
             }
-            
-            # GPT-5 models don't support temperature parameter
-            if not model.startswith("gpt-5"):
-                kwargs["temperature"] = 0.3
             
             response = self.client.chat.completions.create(**kwargs)
             response_text = response.choices[0].message.content

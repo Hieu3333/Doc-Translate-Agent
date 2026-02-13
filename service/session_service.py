@@ -99,6 +99,22 @@ class SessionService:
             return [MessageSchema(**msg) for msg in response.data]
         return []
     
+    def get_message(self, message_id: UUID) -> MessageSchema:
+        """
+        Fetch a single message by ID.
+        
+        Args:
+            message_id: Message ID
+            
+        Returns:
+            MessageSchema: Message data
+        """
+        response = self.db.table("messages").select("*").eq("id", str(message_id)).execute()
+        
+        if response.data:
+            return MessageSchema(**response.data[0])
+        raise Exception(f"Message {message_id} not found")
+    
     def add_message_to_session(self, session_id: UUID, message: MessageCreate) -> MessageSchema:
         """
         Add a message to a session.
@@ -110,12 +126,18 @@ class SessionService:
         Returns:
             MessageSchema: Created message
         """
-        response = self.db.table("messages").insert({
+        insert_data = {
             "session_id": str(session_id),
             "role": message.role,
             "content": message.content,
             "file_path": message.file_path
-        }).execute()
+        }
+        
+        # Include reasoning_content if provided
+        if message.reasoning_content is not None:
+            insert_data["reasoning_content"] = message.reasoning_content
+        
+        response = self.db.table("messages").insert(insert_data).execute()
         
         if response.data:
             return MessageSchema(**response.data[0])
@@ -181,4 +203,22 @@ class SessionService:
             int: Number of messages
         """
         response = self.db.table("messages").select("id").eq("session_id", str(session_id)).execute()
-        return len(response.data) if response.data else 0
+        return len(response.data) if response.data else 0    
+    def update_message_file_path(self, message_id: UUID, file_path: str) -> MessageSchema:
+        """
+        Update a message's file path.
+        
+        Args:
+            message_id: Message ID
+            file_path: File path to attach to the message
+            
+        Returns:
+            MessageSchema: Updated message
+        """
+        response = self.db.table("messages").update({
+            "file_path": file_path
+        }).eq("id", str(message_id)).execute()
+        
+        if response.data:
+            return MessageSchema(**response.data[0])
+        raise Exception(f"Failed to update message {message_id}")
