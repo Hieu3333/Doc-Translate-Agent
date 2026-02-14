@@ -19,10 +19,11 @@ CREATE TABLE public.translation_sessions (
 
 -- Create messages table
 CREATE TABLE public.messages (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id TEXT PRIMARY KEY,   --Use openai's message ID as primary key
     session_id UUID NOT NULL REFERENCES public.translation_sessions(id) ON DELETE CASCADE,
     role VARCHAR(50) NOT NULL,
     content TEXT NOT NULL,
+    reasoning_content TEXT NULL,
     file_path VARCHAR(500),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

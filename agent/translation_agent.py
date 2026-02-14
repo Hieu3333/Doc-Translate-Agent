@@ -71,75 +71,31 @@ Always respond in {self.master_language}, regardless of the language used in the
             # tool_schema already has name, description, and parameters from get_schema()
             openai_tool = {
                 "type": "function",
-                "function": {
-                    "name": tool_schema.get("name"),
-                    "description": tool_schema.get("description"),
-                    "parameters": tool_schema.get("parameters", {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                    }),
-                    "strict": True
-                }
+                "name": tool_schema.get("name"),
+                "description": tool_schema.get("description"),
+                "parameters": tool_schema.get("parameters", {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+                "strict": True
+                
             }
             openai_tools.append(openai_tool)
         
         return openai_tools
+    
+    def build_input(self, messages: List[MessageSchema] = []):
+        """Build input for OpenAI API from message history."""
+        input_messages = []
+        for msg in messages:
+            input_messages.append({
+                "role": msg.role,
+                "content": msg.content
+            })
+        return input_messages
 
-    def build_messages(self, messages: List) -> List[dict]:
-        """
-        Build the messages for the OpenAI API.
-
-        Args:
-            messages (List): List of messages to build (can be strings or MessageSchema objects).
-
-        Returns:
-            List[dict]: List of dictionaries representing the messages.
-        """
-        openai_messages = []
-        for message in messages:
-            # Handle different message types
-            if isinstance(message, str):
-                openai_message = {
-                    "role": "user",
-                    "content": message
-                }
-            elif isinstance(message, dict):
-                openai_message = message
-            else:
-                # Handle MessageSchema or similar objects
-                role = getattr(message, 'role', 'user')
-                content = getattr(message, 'content', str(message))
-                
-                openai_message = {
-                    "role": role,
-                    "content": content
-                }
-                
-                # Handle reasoning_content for deepseek-reasoner models
-                if hasattr(message, 'reasoning_content') and message.reasoning_content:
-                    openai_message["reasoning_content"] = message.reasoning_content
-                
-                # Handle tool calls if present
-                if hasattr(message, 'tool_calls') and message.tool_calls:
-                    openai_message["tool_calls"] = []
-                    for tool_call in message.tool_calls:
-                        tool_call_dict = {
-                            "id": tool_call.get("id") if isinstance(tool_call, dict) else tool_call.id,
-                            "function": {
-                                "arguments": json.dumps(tool_call.get("arguments") if isinstance(tool_call, dict) else tool_call.arguments, ensure_ascii=False),
-                                "name": tool_call.get("name") if isinstance(tool_call, dict) else tool_call.name,
-                            },
-                            "type": "function"
-                        }
-                        openai_message["tool_calls"].append(tool_call_dict)
-            
-            openai_messages.append(openai_message)
-        
-        return openai_messages
-
-
-    def plan_tool_sequence(self, user_message: str, chat_history: List[MessageSchema], model: str) -> List[dict]:
+    def plan_tool_sequence(self, user_message: str, chat_history: List[MessageSchema], model: str) -> dict:
         """Plan tool sequence using OpenAI's native tool calling feature."""
         system_prompt = self._build_system_prompt_for_planning()
 
@@ -151,23 +107,25 @@ Always respond in {self.master_language}, regardless of the language used in the
         # logger.info(f"Planning tool sequence with message: {user_message[:50]}...")
         
         # Build messages from history and current user message
-        history_for_api = self.build_messages(chat_history) if chat_history else []
-        messages = [{"role": "system", "content": system_prompt}] + history_for_api + [{"role": "user", "content": user_message}]
+        
+        messages = self.build_input(chat_history) + [{"role": "user", "content": user_message}]
         
         # Get available tools in OpenAI format
         openai_tools = self._build_tools()
-        
+        logger.info(f"Tools: {openai_tools}")
         if not openai_tools:
             logger.warning("No tools available for planning")
             return []
         
         # Call LLM with tool definitions
         response_data = self.llm_provider.chat_completion(
+            system_prompt=system_prompt,
             messages=messages,
             model=model,
-            tools=openai_tools,
-            tool_choice="auto"
+            tools=openai_tools
         )
+
+        tool_call_response_output = response_data.get("output", [])
         
         # Extract tool calls from response
         tool_calls = response_data.get("tool_calls", [])
@@ -186,12 +144,16 @@ Always respond in {self.master_language}, regardless of the language used in the
                     })
                 except json.JSONDecodeError as e:
                     logger.error(f"Failed to parse tool arguments: {tc['function']['arguments']}")
-            return tool_plans
+            return {"tool_plans": tool_plans,
+                    "output": tool_call_response_output
+                }
         else:
             logger.info("No tool calls in response")
-            return []
+            return {"tool_plans": [],
+                    "output": tool_call_response_output
+                }
 
-    def process_message(self, message: str, main_file_path: str, chat_history: List[MessageSchema], model: str) -> dict:
+    def process_message(self, message: str, main_file_path: str, chat_history: List[MessageSchema], model: str, temperature: float = 0.7, max_tokens: int = 2048) -> dict:
         """
         Process a user message by:
         1. Planning which tools to use (plan_tool_sequence)
@@ -208,10 +170,11 @@ Always respond in {self.master_language}, regardless of the language used in the
       
 
         self.tool_registry.set_context(main_file_path, model)
-        logger.info(f"Tool registry context set to: {main_file_path} with model: {model}")
       
     
-        tool_plans = self.plan_tool_sequence(message, chat_history, model)
+        plan_result = self.plan_tool_sequence(message, chat_history, model)
+        tool_plans = plan_result.get("tool_plans", [])
+        tool_call_response_output = plan_result.get("output", [])
         logger.info(f"Planned tool sequence: {[plan.get('tool') for plan in tool_plans]}")
         
         if not tool_plans:
@@ -220,13 +183,12 @@ Always respond in {self.master_language}, regardless of the language used in the
             
             system_prompt = f"You are a helpful translation agent. Respond to the user in {self.master_language}."
             
-            # Build messages with conversation history using build_messages()
-            history_for_api = self.build_messages(chat_history) if chat_history else []
-            chat_messages = [{"role": "system", "content": system_prompt}] + history_for_api + [{"role": "user", "content": message}]
-            
+            chat_messages = self.build_input(chat_history) + [{"role": "user", "content": message}]
             response_data = self.llm_provider.chat_completion(
+                system_prompt=system_prompt,
                 model=model,
-                messages=chat_messages
+                messages=chat_messages,
+                temperature=temperature
             )
             
             return {
@@ -237,23 +199,13 @@ Always respond in {self.master_language}, regardless of the language used in the
 
         output_files = []
         tool_messages = []
-        tool_calls_list = []
         
         for plan in tool_plans:
             tool_call_id = plan.get("id")
             tool_name = plan.get("tool")
             tool_args = plan.get("args", {})
             
-            # Reconstruct tool_calls format for assistant message
-            tool_calls_list.append({
-                "id": tool_call_id,
-                "type": "function",
-                "function": {
-                    "name": tool_name,
-                    "arguments": json.dumps(tool_args)
-                }
-            })
-            
+         
             try:
                 logger.info(f"Executing tool '{tool_name}' with args: {tool_args}")
                 result = self.tool_registry.execute_tool(tool_name, **tool_args)
@@ -268,47 +220,44 @@ Always respond in {self.master_language}, regardless of the language used in the
                         tool_status += f"\nResult: {result.get('result')}"
                     
                     tool_messages.append({
-                        "role": "tool", 
-                        "tool_call_id": tool_call_id,
-                        "content": tool_status
+                        "type": "function_call_output", 
+                        "call_id": tool_call_id,
+                        "output": tool_status
                     })
                     logger.info(f"Tool '{tool_name}' executed successfully")
                 else:
                     # Add error message as tool result
                     tool_messages.append({
-                        "role": "tool", 
-                        "tool_call_id": tool_call_id,
-                        "content": f"Tool: {tool_name}\nStatus: {result.get('status')}"
+                        "type": "function_call_output", 
+                        "call_id": tool_call_id,
+                        "output": f"Result: {result.get('status')}"
                     })
                     logger.warning(f"Tool '{tool_name}' execution failed: {result.get('status')}")
             except Exception as e:
                 tool_messages.append({
-                    "role": "tool", 
-                    "tool_call_id": tool_call_id,
-                    "content": f"Tool: {tool_name}\nStatus: Error executing tool - {str(e)}"
+                    "type": "function_call_output", 
+                    "call_id": tool_call_id,
+                    "output": f"Result: Error executing tool - {str(e)}"
                 })
                 logger.error(f"Error executing tool '{tool_name}': {str(e)}", exc_info=True)
         
         # Build messages with system prompt, chat history, user message, assistant message with tool_calls, and tool results
         system_prompt = self._build_system_prompt_for_summarization()
         
-        history_for_api = self.build_messages(chat_history) if chat_history else []
+      
         
-        # Build assistant message - add reasoning_content for deepseek-reasoner model
-        assistant_message = {"role": "assistant", "tool_calls": tool_calls_list}
-        if model == "deepseek-reasoner":
-            assistant_message["reasoning_content"] = ""
+        # # Build assistant message - add reasoning_content for deepseek-reasoner model
+        # assistant_message = {"role": "assistant", "tool_calls": tool_calls_list}
+        # if model == "deepseek-reasoner":
+        #     assistant_message["reasoning_content"] = ""
         
-        summary_messages = [
-            {"role": "system", "content": system_prompt}
-        ] + history_for_api + [
-            {"role": "user", "content": message},
-            assistant_message
-        ] + tool_messages
+        summary_messages = self.build_input(chat_history) + [{"role": "user", "content": message}] + tool_call_response_output + tool_messages
         
         summary_response = self.llm_provider.chat_completion(
+            system_prompt=system_prompt,
             model=model,
-            messages=summary_messages
+            messages=summary_messages,
+            temperature=temperature
         )
         output_text = summary_response["response"]
         reasoning_content = summary_response.get("reasoning_content")

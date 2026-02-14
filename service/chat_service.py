@@ -16,7 +16,9 @@ class ChatService:
         user_message: str,
         main_file_path: str,
         conversation_history: Optional[List[MessageSchema]] = None,
-        model: str = "gpt-4o-mini"
+        model: str = "gpt-4o-mini",
+        temperature: float = 0.7,
+        max_tokens: int = 2048
     ) -> dict:
         
         """
@@ -38,7 +40,9 @@ class ChatService:
             message=user_message,
             main_file_path=main_file_path,
             chat_history=conversation_history or [],
-            model=model
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens
         )
         return {
             "response": result.get("response"),
