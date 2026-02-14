@@ -7,6 +7,7 @@ import os
 from typing import Optional, List
 from dotenv import load_dotenv
 import logging
+from core.schemas.session import MessageSchema
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -20,7 +21,6 @@ class OpenAILLM:
     
     def __init__(self):
         self.api_key = os.getenv("OPENAI_API_KEY")
-        self.model = "gpt-4o-mini"
         
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY environment variable is not set")
@@ -57,76 +57,70 @@ class OpenAILLM:
         """Get list of available models from OpenAI provider"""
         return list(self.cost_table.keys())
     
+    
+    
+    def calculate_cost(self, model: str, usage: dict) -> float:
+        """Calculate cost based on token usage and model pricing."""
+        if model not in self.cost_table:
+            logger.warning(f"Model {model} not found in cost table. Cost will be set to 0.")
+            return 0.0
+        
+        input_cost = usage.input_tokens * self.cost_table[model]["input"] / 1000
+        output_cost = usage.output_tokens * self.cost_table[model]["output"] / 1000
+        total_cost = input_cost + output_cost
+        return round(total_cost, 6)
+    
     def chat_completion(
         self,
+        system_prompt: str,
         messages: List[dict],
         model: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: Optional[int] = None,
         tools: Optional[List[dict]] = None,
-        tool_choice: Optional[str] = None,
     ) -> dict:
         """Send chat completion request to OpenAI API."""
-        chosen_model = model if model else self.model
         
-        # GPT-5 models don't support temperature parameter
-        is_gpt5 = chosen_model.startswith("gpt-5")
-        
-        api_params = {
-            "model": chosen_model,
-            "messages": messages,
+        params = {
+            "model": model,
+            "instructions": system_prompt,
+            "tools": tools, 
+            "input": messages,
         }
-        
-        if not is_gpt5:
-            api_params["temperature"] = temperature
-        
-        if max_tokens is not None:
-            api_params["max_tokens"] = max_tokens
-        
-        # Add tools if provided
-        if tools:
-            api_params["tools"] = tools
-            # If tools are provided, set tool_choice (default to "auto")
-            api_params["tool_choice"] = tool_choice if tool_choice else "auto"
-        
-        response = self.client.chat.completions.create(**api_params)
-        
-        # Extract response data
-        message = response.choices[0].message
-        logger.info(f"LLM Response Message: {message}")
-        output_text = message.content or ""
-        
-        # Extract reasoning_content if present
-        reasoning_content = None
-        if hasattr(message, 'reasoning_content') and message.reasoning_content:
-            reasoning_content = message.reasoning_content
-        
-        # Extract tool calls if present
+        # GPT-5 models don't support temperature parameter
+        if not model.startswith("gpt-5"):
+            params["temperature"] = temperature
+
         tool_calls = []
-        if hasattr(message, 'tool_calls') and message.tool_calls:
-            tool_calls = [
-                {
-                    "id": call.id,
-                    "type": call.type,
+        output_text = None
+        response = self.client.responses.create(**params)
+        for item in response.output:
+            if item.type == "message":
+                output_text = item.content[0].text
+            # elif item.type == "reasoning":
+            #     reasoning_text = item.content
+            elif item.type == "function_call":
+                tool_call = {
+                    "id": item.call_id,
                     "function": {
-                        "name": call.function.name,
-                        "arguments": call.function.arguments
+                        "name": item.name,
+                        "arguments": item.arguments
                     }
                 }
-                for call in message.tool_calls
-            ]
+                tool_calls.append(tool_call)
         
-        token_usage = {
-            "input_tokens": response.usage.prompt_tokens,
-            "output_tokens": response.usage.completion_tokens,
-        }
-        cost = token_usage["input_tokens"] * self.cost_table[chosen_model]["input"] / 1_000_000 + \
-               token_usage["output_tokens"] * self.cost_table[chosen_model]["output"] / 1_000_000
-        
+        response_usage = response.usage.model_dump() if response.usage else {"input_tokens": 0, "output_tokens": 0}
+
+
         return {
+            "id": response.id,
+            "output": response.output,
             "response": output_text,
-            "reasoning_content": reasoning_content,
             "tool_calls": tool_calls,
-            "token_usage": token_usage,
-            "cost": cost
+            "token_usage": response_usage,
+            "cost": self.calculate_cost(model, response.usage)
         }
+
+
+
+        
+
